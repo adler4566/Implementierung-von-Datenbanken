@@ -3,6 +3,9 @@
 
 # except
 !.gitignore
+
+!DBMyIndex.cpp
+!DBMyIndex.h
 !*/
 
 
