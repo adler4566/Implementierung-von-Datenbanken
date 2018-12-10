@@ -4,8 +4,8 @@
 # except
 !.gitignore
 
-!*/HubDB/DBLib/DBMyIndex.cpp
-!*/HubDB/include/hubDB/DBMyIndex.h
+!/HubDB/DBLib/DBMyIndex.cpp
+!/HubDB/include/hubDB/DBMyIndex.h
 
 
 
