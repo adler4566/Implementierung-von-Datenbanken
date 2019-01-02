@@ -25,7 +25,7 @@ namespace HubDB{
             struct splitInfo {
                 splitInfo();
                 bool splitHappens;
-                const DBAttrType & newKey;
+                const DBAttrType * newKey;
                 BlockNo newBlockNo;
             };
             uint keysPerInnerNode()const;
@@ -35,6 +35,7 @@ namespace HubDB{
             void findInLeafNode(const DBAttrType & val,BlockNo b,list<TID> & tids);
 
             splitInfo insertIntoLeaf(const BlockNo b, const DBAttrType &val, const TID &tid);
+            splitInfo insertIntoInner(const BlockNo b, const DBAttrType &val, const BlockNo &newBlockNo);
 
             static const BlockNo metaBlockNo;
             stack<DBBACB> bacbStack;

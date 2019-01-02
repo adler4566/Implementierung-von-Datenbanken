@@ -55,15 +55,17 @@ void DBMyIndex::initializeIndex() {
         bacbStack.top().setModified();
         BlockNo * b = (BlockNo *) bacbStack.top().getDataPtr();
         uint * metaPage = (uint *) b + sizeof(BlockNo);
-        metaPage[0] = 0; //depth of tree
-        metaPage[1] = keysPerInnerNode(); //branching factor of inner nodes (TBD)
-        metaPage[2] = keysPerLeafNode(); //branching factor of leaf nodes (TBD)
+        *metaPage = 0; //depth of tree
+
+        //unused meta page info: keys per inner/leaf node saved instead of calculated
+        //metaPage[1] = keysPerInnerNode();
+        //metaPage[2] = keysPerLeafNode();
 
         bacbStack.push(bufMgr.fixNewBlock(file));
         bacbStack.top().setModified();
         uint * rootCnt = (uint *) bacbStack.top().getDataPtr();
         rootCnt = 0; //not sure if this is necessary
-        b[0] = bacbStack.top().getBlockNo();
+        *b = bacbStack.top().getBlockNo();
     } catch (DBException & e) {
         if (bacbStack.empty() == false)
             bufMgr.unfixBlock(bacbStack.top());
@@ -127,7 +129,7 @@ BlockNo DBMyIndex::findInInnerNode(const DBAttrType & val, BlockNo b) {
     for (uint i = 0; i < cnt; i++) {
         DBAttrType * attr = DBAttrType::read(ptr, attrType, &ptr);
         if (*attr > val) {
-            ptr -= DBAttrType::getSize4Type(attrType)+sizeof(BlockNo);
+            ptr -= attrTypeSize+sizeof(BlockNo);
             break;
         } else if(*attr == val) {
             break;
@@ -190,7 +192,40 @@ void DBMyIndex::insert(const DBAttrType &val, const TID &tid) {
     }
 
     BlockNo leaf = blocks.top();
+    blocks.pop();
+    splitInfo splitResult = insertIntoLeaf(leaf, val, tid);
 
+    while(splitResult.splitHappens && !blocks.empty()) {
+        BlockNo inner = blocks.top();
+        blocks.pop();
+        splitResult = insertIntoInner(inner, *splitResult.newKey, splitResult.newBlockNo);
+    }
+    if(splitResult.splitHappens && blocks.empty()) {
+        //root node was split!
+        bacbStack.push(bufMgr.fixNewBlock(file));
+        char * newFilePtr = bacbStack.top().getDataPtr();
+        uint * newCnt = (uint *) newFilePtr;
+        *newCnt = 1;
+        newFilePtr += sizeof(uint);
+        BlockNo * newBlock = (BlockNo *) newFilePtr;
+        *newBlock = *(BlockNo *) metaPtr; //root node
+        newFilePtr += sizeof(BlockNo);
+        newFilePtr = splitResult.newKey.write(newFilePtr);
+        newBlock = (BlockNo *) newFilePtr;
+        *newBlock = splitResult.newBlockNo;
+
+        BlockNo newRootBlockNo = bacbStack.top().getBlockNo();
+
+        bacbStack.top().setModified();
+        bufMgr.unfixBlock(bacbStack.top());
+        bacbStack.pop();
+
+        BlockNo * rootPtr = (BlockNo *) metaPtr;
+        *rootPtr = newRootBlockNo;
+        uint * depthPtr = (uint *) metaPtr + sizeof(BlockNo);
+        *depthPtr++;
+        bacbStack.top().setModified();
+    }
 }
 
 DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType &val, const TID &tid) {
@@ -211,6 +246,9 @@ DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType
         } else if (*attr == val) {
             TID * tidPtr = (TID *) ptr;
             *tidPtr = tid;
+            bacbStack.top().setModified();
+            bufMgr.unfixBlock(bacbStack.top());
+            bacbStack.pop();
             return returnObject;
         }
         ptr += sizeof(TID);
@@ -231,15 +269,12 @@ DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType
         *cntNew = keysToMove;
         ptrNew+=sizeof(uint);
         memcpy(ptrNew, ptrOld, (sizeof(TID)+ attrTypeSize)*keysToMove);
+        returnObject.newKey = DBAttrType::read(ptrNew, attrType);
 
         if(pos <= *cnt) {
             //insert in left node
-
-            //TODO set newKey in return object
-            //DBAttrType * attr = DBAttrType::read(ptrNew, attrType);
-            //returnObject.newKey = attr;
-
             LOG4CXX_DEBUG(logger,"unfix right page");
+            bacbStack.top().setModified();
             bufMgr.unfixBlock(bacbStack.top());
             bacbStack.pop();
         } else {
@@ -250,10 +285,10 @@ DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType
     //insert
     uint * cntPtr = (uint *) bacbStack.top().getDataPtr();
     char * from = bacbStack.top().getDataPtr() + sizeof(uint) + (sizeof(TID)+ attrTypeSize) * pos;
-    if(pos < *cnt) {
+    if(pos < *cntPtr) {
         //move
         char * to = from + sizeof(TID) + attrTypeSize;
-        memmove(to, from, (sizeof(TID) + attrTypeSize) * (*cnt - pos));
+        memmove(to, from, (sizeof(TID) + attrTypeSize) * (*cntPtr - pos));
     }
     from = val.write(from);
     TID * tidPtr = (TID *) from;
@@ -261,10 +296,88 @@ DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType
     *cntPtr++;
 
     if(unfixNewNode) {
-        //TODO set newKey in return object
+        bacbStack.top().setModified();
         bufMgr.unfixBlock(bacbStack.top());
         bacbStack.pop();
     }
+    bacbStack.top().setModified();
+    bufMgr.unfixBlock(bacbStack.top());
+    bacbStack.pop();
+
+    return returnObject;
+}
+
+DBMyIndex::splitInfo DBMyIndex::insertIntoInner(const BlockNo b, const DBAttrType &val, const BlockNo &newBlockNo) {
+    splitInfo returnObject;
+    returnObject.splitHappens = false;
+
+    bacbStack.push(bufMgr.fixBlock(file, b, LOCK_EXCLUSIVE));
+    const char * ptr = bacbStack.top().getDataPtr();
+    uint * cnt = (uint *) ptr;
+    ptr += sizeof(uint) + sizeof(BlockNo);
+
+    //search inner node for insert position
+    uint pos = 0;
+    for(; pos < *cnt; pos++) {
+        DBAttrType * attr = DBAttrType::read(ptr, attrType, &ptr);
+        if (*attr > val) {
+            pos--;
+            break;
+        }
+        ptr += sizeof(BlockNo);
+    }
+
+    //if block is full, split
+    bool unfixNewNode = false;
+    if(*cnt == keysPerInnerNode()) {
+        returnObject.splitHappens = true;
+        const char * ptrOld = bacbStack.top().getDataPtr();
+        uint keysToMove = keysPerInnerNode() / 2;
+        *cnt -= keysToMove+1;
+        ptrOld += sizeof(uint) + (sizeof(BlockNo)+ attrTypeSize) * (*cnt+1);
+
+        bacbStack.push(bufMgr.fixNewBlock(file));
+        char * ptrNew = bacbStack.top().getDataPtr();
+        returnObject.newBlockNo = bacbStack.top().getBlockNo();
+        uint * cntNew = (uint *)ptrNew;
+        *cntNew = keysToMove;
+        ptrNew+=sizeof(uint);
+        memcpy(ptrNew, ptrOld, sizeof(BlockNo) +(sizeof(BlockNo)+ attrTypeSize)*keysToMove);
+
+        ptrOld -= sizeof(attrTypeSize);
+        returnObject.newKey = DBAttrType::read(ptrOld, attrType);
+
+        if(pos <= *cnt) {
+            //insert in left node
+            LOG4CXX_DEBUG(logger,"unfix right page");
+            bacbStack.top().setModified();
+            bufMgr.unfixBlock(bacbStack.top());
+            bacbStack.pop();
+        } else {
+            unfixNewNode = true;
+            pos -= *cnt+1;
+        }
+    }
+
+    //insert
+    uint * cntPtr = (uint *) bacbStack.top().getDataPtr();
+    char * from = bacbStack.top().getDataPtr() + sizeof(uint) + sizeof(BlockNo) + (sizeof(BlockNo)+ attrTypeSize) * pos;
+    if(pos < *cntPtr) {
+        //move
+        char * to = from + sizeof(BlockNo) + attrTypeSize;
+        memmove(to, from, (sizeof(BlockNo) + attrTypeSize) * (*cntPtr - pos));
+    }
+    from = val.write(from);
+    BlockNo * blockNoPtr = (BlockNo *) from;
+    *blockNoPtr = newBlockNo;
+    *cntPtr++;
+
+    if(unfixNewNode) {
+        bacbStack.top().setModified();
+        bufMgr.unfixBlock(bacbStack.top());
+        bacbStack.pop();
+    }
+    bacbStack.top().setModified();
     bufMgr.unfixBlock(bacbStack.top());
     bacbStack.pop();
 
@@ -272,7 +385,7 @@ DBMyIndex::splitInfo DBMyIndex::insertIntoLeaf(const BlockNo b, const DBAttrType
 }
 
 void DBMyIndex::remove(const DBAttrType &val, const DBListTID &tid) {
-
+        LOG4CXX_INFO(logger,"This isn't due yet!");
 }
 
 void DBMyIndex::unfixBACBs(bool setDirty) {
