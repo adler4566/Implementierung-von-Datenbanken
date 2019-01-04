@@ -9,7 +9,7 @@ LoggerPtr DBMyIndex::logger(Logger::getLogger("HubDB.Index.DBMyIndex"));
 // registerClass()-Methode am Ende dieser Datei: macht die Klasse der Factory bekannt
 int rMyIdx = DBMyIndex::registerClass();
 const BlockNo DBMyIndex::metaBlockNo(0);
-extern "C" void * createDBMyIndex(int nArgs, va_list & ap);
+extern "C" void * createDBMyIndex(int nArgs, va_list ap);
 //TODO: Defininiere Konstante für B+ Baum
 
 DBMyIndex::DBMyIndex(DBBufferMgr &bufferMgr, DBFile &file, enum AttrTypeEnum attrType, ModType mode, bool unique)
@@ -418,7 +418,7 @@ int DBMyIndex::registerClass() {
  * - ModeType: READ, WRITE
  * - bool: unique Indexattribut
  */
-extern "C" void * createDBMyIndex(int nArgs, va_list & ap) {
+extern "C" void * createDBMyIndex(int nArgs, va_list ap) {
     // Genau 5 Parameter
     if (nArgs != 5) {
         throw DBException("Invalid number of arguments");

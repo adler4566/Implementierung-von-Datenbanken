@@ -23,7 +23,7 @@ namespace HubDB{
 
         private:
             struct splitInfo {
-                splitInfo();
+                //splitInfo();
                 bool splitHappens;
                 const DBAttrType * newKey;
                 BlockNo newBlockNo;
@@ -37,6 +37,7 @@ namespace HubDB{
             splitInfo insertIntoLeaf(const BlockNo b, const DBAttrType &val, const TID &tid);
             splitInfo insertIntoInner(const BlockNo b, const DBAttrType &val, const BlockNo &newBlockNo);
 
+			static LoggerPtr logger;
             static const BlockNo metaBlockNo;
             stack<DBBACB> bacbStack;
         };
